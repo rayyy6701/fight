@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Action Game Prototype</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        /* 開発者用チートパネルのスタイリング */
+        #cheat-panel {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: rgba(20, 20, 20, 0.85);
+            backdrop-filter: blur(5px);
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 12px;
+            color: #fff;
+            width: 220px;
+            z-index: 10;
+            font-size: 13px;
+        }
+        #cheat-panel h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #00ffcc;
+            border-bottom: 1px solid #333;
+            padding-bottom: 5px;
+        }
+        .cheat-group {
+            margin-bottom: 10px;
+        }
+        .cheat-group label {
+            display: block;
+            margin-bottom: 4px;
+            color: #ccc;
+        }
+        .cheat-group input[type="range"], .cheat-group select {
+            width: 100%;
+            background: #333;
+            border: 1px solid #555;
+            color: #fff;
+            padding: 4px;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .cheat-value {
+            float: right;
+            color: #00ffcc;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="cheat-panel">
+            <h3>Cheat Console</h3>
+            <div class="cheat-group">
+                <label>基本攻撃力倍率: <span id="atk-val" class="cheat-value">1.0</span></label>
+                <input type="range" id="cheat-atk" min="0.5" max="10" step="0.5" value="1">
+            </div>
+            <div class="cheat-group">
+                <label>武器強制変更</label>
+                <select id="cheat-weapon">
+                    <option value="bareHands">素手</option>
+                    <option value="greatSword">大剣</option>
+                    <option value="magicWand">魔法の杖</option>
+                    <option value="dualBlades">双剣</option>
+                </select>
+            </div>
+            <div style="font-size: 10px; color: #888; text-align: center; margin-top: 5px;">
+                [WASD/矢印]: 移動 | [Space/クリック]: 攻撃<br>[E]: 宝箱を開ける
+            </div>
+        </div>
+    </div>
+
+<script>
+// ==========================================
+// 1. 武器データの定義（データ駆動型設計）
+// ==========================================
+const WEAPON_DATA = {
+    bareHands: {
+        name: "素手",
+        damage: 10,
+        attackCooldown: 300,
+        range: 50,
+        type: "melee",
+        color: 0xaaaaaa,
+        scaleX: 0.8,
+        scaleY: 0.2,
+        hitStop: 40,
+        shake: 0.005,
+        multiHit: 1
+    },
+    greatSword: {
+        name: "大剣",
+        damage: 45,
+        attackCooldown: 800,
+        range: 90,
+        type: "melee",
+        color: 0xff3333,
+        scaleX: 1.5,
+        scaleY: 0.5,
+        hitStop: 120,
+        shake: 0.02,
+        multiHit: 1
+    },
+    magicWand: {
+        name: "魔法の杖",
+        damage: 20,
+        attackCooldown: 400,
+        range: 400, // 遠距離
+        type: "ranged",
+        color: 0x3399ff,
+        scaleX: 1.0,
+        scaleY: 0.3,
+        hitStop: 20,
+        shake: 0.003,
+        bulletSpeed: 500,
+        multiHit: 1
+    },
+    dualBlades: {
+        name: "双剣",
+        damage: 6, // 1ヒットあたり（合計18）
+        attackCooldown: 200,
+        range: 60,
+        type: "melee",
+        color: 0xffcc00,
+        scaleX: 0.9,
+        scaleY: 0.15,
+        hitStop: 20,
+        shake: 0.004,
+        multiHit: 3 // 3連撃
+    }
+};
+
+// ==========================================
+// 2. ゲームオブジェクトクラスの定義
+// ==========================================
+
+// --- プレイヤー（慣性移動・武器管理） ---
+class Player extends Phaser.Physics.Arcade.Sprite {
+    constructor(scene, x, y) {
+        super(scene, x, y, 'player');
+        scene.add.existing(this);
+        scene.physics.add.existing(this);
+
+        this.setCircle(16);
+        this.setCollideWorldBounds(true);
+        this.setDrag(1500); // 強い摩擦（滑らかな減速）
+        this.setMaxVelocity(300);
+
+        // 武器初期化
+        this.currentWeaponKey = 'bareHands';
+        this.isAttacking = false;
+        this.lastAttackTime = 0;
+
+        // 見た目の簡易構築（テクスチャ生成前の代用）
+        this.tint = 0x00ff88;
+    }
+
+    get weapon() {
+        return WEAPON_DATA[this.currentWeaponKey];
+    }
+
+    update(cursors, keys) {
+        // 移動入力の処理（加速）
+        let accelX = 0;
+        let accelY = 0;
+        const accelConst = 2000;
+
+        if (cursors.left.isDown || keys.A.isDown) accelX = -accelConst;
+        else if (cursors.right.isDown || keys.D.isDown) accelX = accelConst;
+
+        if (cursors.up.isDown || keys.W.isDown) accelY = -accelConst;
+        else if (cursors.down.isDown || keys.S.isDown) accelY = accelConst;
+
+        this.setAcceleration(accelX, accelY);
+
+        // マウスの方向を向く
+        let pointer = this.scene.input.activePointer;
+        let angle = Phaser.Math.Angle.Between(this.x, this.y, pointer.worldX, pointer.worldY);
+        this.setRotation(angle);
+    }
+
+    equip(weaponKey) {
+        if (WEAPON_DATA[weaponKey]) {
+            this.currentWeaponKey = weaponKey;
+            this.scene.showPopup(this.x, this.y - 30, `${this.weapon.name} を装備！`, 0x00ffcc);
+            document.getElementById('cheat-weapon').value = weaponKey;
+        }
+    }
+}
+
+// --- サンドバック（標的） ---
+class Sandbag extends Phaser.Physics.Arcade.Sprite {
+    constructor(scene, x, y) {
+        super(scene, x, y, 'sandbag');
+        scene.add.existing(this);
+        scene.physics.add.existing(this);
+        this.setImmovable(true);
+        this.setCircle(20);
+        this.tint = 0xff6666;
+        this.originX = x;
+        this.originY = y;
+    }
+
+    takeDamage(amount, weaponConfig) {
+        // ヒットストップ（シーン全体の更新を一時停止するフラグを立てる）
+        this.scene.triggerHitStop(weaponConfig.hitStop);
+
+        // 被弾アニメーション（スケールを歪ませるジューシーさ）
+        this.scene.tweens.add({
+            targets: this,
+            scaleX: 1.4,
+            scaleY: 0.7,
+            duration: 50,
+            yoyo: true,
+            onComplete: () => {
+                this.setScale(1);
+            }
+        });
+
+        // ノックバック効果（固定物なので、少しブレて戻る挙動で表現）
+        this.scene.tweens.add({
+            targets: this,
+            x: this.originX + Phaser.Math.Between(-10, 10),
+            y: this.originY + Phaser.Math.Between(-10, 10),
+            duration: 50,
+            yoyo: true,
+            onComplete: () => {
+                this.x = this.originX;
+                this.y = this.originY;
+            }
+        });
+
+        // 火花エフェクト
+        this.scene.sparks.emitParticleAt(this.x, this.y, Phaser.Math.Between(5, 10));
+
+        // スクリーンシェイク
+        this.scene.cameras.main.shake(100, weaponConfig.shake);
+
+        // ダメージ数字のポップアップ
+        this.scene.showDamagePopup(this.x, this.y - 20, Math.round(amount));
+    }
+}
+
+// --- 宝箱 ---
+class Chest extends Phaser.Physics.Arcade.Sprite {
+    constructor(scene, x, y) {
+        super(scene, x, y, 'chest');
+        scene.add.existing(this);
+        scene.physics.add.existing(this);
+        this.setImmovable(true);
+        this.tint = 0xffd700; 
+        this.isOpened = false;
+
+        // フローティングUIインジケータ
+        this.hintText = scene.add.text(x, y - 25, '[E] Open', { fontSize: '12px', fill: '#fff' }).setOrigin(0.5);
+    }
+
+    open() {
+        if (this.isOpened) return;
+        this.isOpened = true;
+        this.hintText.destroy();
+        this.tint = 0x555555; // 開いた後はくすんだ色に
+
+        // ランダムに武器を選出（素手以外）
+        const weapons = Object.keys(WEAPON_DATA).filter(k => k !== 'bareHands');
+        const randomWeapon = weapons[Phaser.Math.Between(0, weapons.length - 1)];
+
+        // 武器アイテムをその場にドロップ
+        this.scene.dropWeaponItem(this.x, this.y + 20, randomWeapon);
+    }
+}
+
+// ==========================================
+// 3. メインゲームシーン
+// ==========================================
+class MainScene extends Phaser.Scene {
+    constructor() {
+        super('MainScene');
+    }
+
+    preload() {
+        // グラフィックアセットを簡易的に生成（外部画像不要にするため）
+        let createCircleText = (key, radius, color) => {
+            let r = this.make.graphics({ x: 0, y: 0, add: false });
+            r.fillStyle(color, 1);
+            r.fillCircle(radius, radius, radius);
+            r.fillStyle(0xffffff, 0.5);
+            r.fillCircle(radius + radius*0.3, radius - radius*0.3, radius*0.2); // ハイライト
+            r.generateTexture(key, radius * 2, radius * 2);
+        };
+        
+        let createSquareText = (key, w, h, color) => {
+            let r = this.make.graphics({ x: 0, y: 0, add: false });
+            r.fillStyle(color, 1);
+            r.fillRect(0, 0, w, h);
+            r.generateTexture(key, w, h);
+        };
+
+        createCircleText('player', 16, 0x00ff88);
+        createCircleText('sandbag', 20, 0xff3366);
+        createSquareText('chest', 32, 24, 0xd4af37);
+        createCircleText('bullet', 6, 0x00ffff);
+        createSquareText('slash', 60, 15, 0xffffff);
+        createCircleText('spark', 3, 0xffaa00);
+    }
+
+    create() {
+        // グリッド背景の描画
+        let grid = this.add.graphics();
+        grid.lineStyle(1, 0x333333, 1);
+        for(let x=0; x<800; x+=40) grid.lineBetween(x, 0, x, 600);
+        for(let y=0; y<600; y+=40) grid.lineBetween(0, y, 800, y);
+
+        // システム変数
+        this.hitStopTimer = 0;
+        this.cheatDamageMultiplier = 1.0;
+
+        // グループ作成
+        this.bullets = this.physics.add.group();
+        this.chests = this.physics.add.group();
+        this.droppedItems = this.physics.add.group();
+
+        // プレイヤーと標的の生成
+        this.player = new Player(this, 150, 300);
+        this.sandbag = new Sandbag(this, 400, 300);
+
+        // 宝箱の配置
+        this.chests.add(new Chest(this, 300, 150));
+        this.chests.add(new Chest(this, 500, 450));
+
+        // エフェクト（火花パーティクル）
+        this.sparks = this.add.particles(0, 0, 'spark', {
+            speed: { min: 100, max: 250 },
+            angle: { min: 0, max: 360 },
+            scale: { start: 1.5, end: 0 },
+            lifespan: 300,
+            gravityY: 0,
+            tint: [0xffcc00, Phaser.Display.Color.GetColor(255,50,0)],
+            emitting: false
+        });
+
+        // キーボード入力設定
+        this.cursors = this.input.keyboard.createCursorKeys();
+        this.keys = this.input.keyboard.addKeys('W,A,S,D,E');
+        this.spaceKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+        // 衝突判定の設定
+        this.physics.add.collider(this.player, this.sandbag);
+        this.physics.add.overlap(this.bullets, this.sandbag, this.handleBulletHit, null, this);
+        this.physics.add.overlap(this.player, this.droppedItems, this.handleItemPickup, null, this);
+
+        // チートパネルのイベントバインド
+        this.setupCheatPanel();
+    }
+
+    update(time, delta) {
+        // ヒットストップ処理
+        if (this.hitStopTimer > 0) {
+            this.hitStopTimer -= delta;
+            this.physics.world.pause();
+            return;
+        } else {
+            this.physics.world.resume();
+        }
+
+        // 各種更新
+        this.player.update(this.cursors, this.keys);
+
+        // 攻撃入力検知 (Space または マウス左クリック)
+        let pointer = this.input.activePointer;
+        if ((this.spaceKey.isDown || pointer.isDown) && time > this.player.lastAttackTime + this.player.weapon.attackCooldown) {
+            this.executeAttack(time);
+        }
+
+        // 宝箱を開けるインタラクション (Eキー)
+        if (Phaser.Input.Keyboard.JustDown(this.keys.E)) {
+            this.chests.getChildren().forEach(chest => {
+                let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, chest.x, chest.y);
+                if (dist < 60) chest.open();
+            });
+        }
+    }
+
+    // ==========================================
+    // 4. 戦闘システム・エフェクトの実装
+    // ==========================================
+    
+    executeAttack(time) {
+        this.player.lastAttackTime = time;
+        const weapon = this.player.weapon;
+
+        // 多段ヒット（双剣など）に対応するループラップ
+        for (let i = 0; i < weapon.multiHit; i++) {
+            this.time.delayedCall(i * (weapon.attackCooldown / (weapon.multiHit + 1)), () => {
+                if (!this.player.active) return;
+                
+                let angle = this.player.rotation;
+
+                if (weapon.type === "melee") {
+                    // 近接攻撃の当たり判定と斬撃エフェクト（ビジュアルトレイルの代用）
+                    let reachX = this.player.x + Math.cos(angle) * weapon.range;
+                    let reachY = this.player.y + Math.sin(angle) * weapon.range;
+
+                    // 斬撃ビジュアルの生成
+                    let slash = this.add.sprite(reachX, reachY, 'slash');
+                    slash.setRotation(angle);
+                    slash.setTint(weapon.color);
+                    slash.setScale(weapon.scaleX, weapon.scaleY);
+                    
+                    this.tweens.add({
+                        targets: slash,
+                        alpha: 0,
+                        scaleY: 0,
+                        duration: 150,
+                        onComplete: () => slash.destroy()
+                    });
+
+                    // 範囲判定（簡易円判定）
+                    let distToTarget = Phaser.Math.Distance.Between(reachX, reachY, this.sandbag.x, this.sandbag.y);
+                    if (distToTarget < 45 + weapon.range * 0.3) {
+                        let finalDamage = weapon.damage * this.cheatDamageMultiplier;
+                        this.sandbag.takeDamage(finalDamage, weapon);
+                    }
+
+                } else if (weapon.type === "ranged") {
+                    // 遠距離攻撃（弾の発射）
+                    let bullet = this.bullets.create(this.player.x, this.player.y, 'bullet');
+                    bullet.setTint(weapon.color);
+                    
+                    let vx = Math.cos(angle) * weapon.bulletSpeed;
+                    let vy = Math.sin(angle) * weapon.bulletSpeed;
+                    bullet.setVelocity(vx, vy);
+                    bullet.weaponConfig = weapon; // 設定を弾に持たせる
+
+                    // 画面外で消滅
+                    this.time.delayedCall(2000, () => { if(bullet.active) bullet.destroy(); });
+                }
+            });
+        }
+    }
+
+    handleBulletHit(sandbag, bullet) {
+        let finalDamage = bullet.weaponConfig.damage * this.cheatDamageMultiplier;
+        sandbag.takeDamage(finalDamage, bullet.weaponConfig);
+        bullet.destroy();
+    }
+
+    triggerHitStop(duration) {
+        this.hitStopTimer = duration;
+    }
+
+    // --- アイテムドロップ＆取得 ---
+    dropWeaponItem(x, y, weaponKey) {
+        let item = this.droppedItems.create(x, y, 'bullet');
+        item.setScale(2);
+        item.setTint(WEAPON_DATA[weaponKey].color);
+        item.weaponKey = weaponKey;
+
+        this.add.text(x, y - 15, WEAPON_DATA[weaponKey].name, { fontSize: '10px', fill: '#fff' }).setOrigin(0.5);
+
+        // ふわふわ浮かぶアニメーション
+        this.tweens.add({
+            targets: item,
+            y: y - 8,
+            duration: 800,
+            yoyo: true,
+            repeat: -1
+        });
+    }
+
+    handleItemPickup(player, item) {
+        player.equip(item.weaponKey);
+        item.destroy();
+    }
+
+    // --- UIポップアップ演出 ---
+    showDamagePopup(x, y, amount) {
+        let dmgText = this.add.text(x, y, amount, {
+            fontSize: '28px',
+            fontStyle: 'bold',
+            fill: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 4
+        }).setOrigin(0.5);
+
+        this.tweens.add({
+            targets: dmgText,
+            y: y - Phaser.Math.Between(40, 70),
+            x: x + Phaser.Math.Between(-30, 30),
+            scale: { start: 1.4, end: 0.6 },
+            alpha: 0,
+            duration: 600,
+            ease: 'Cubic.easeOut',
+            onComplete: () => dmgText.destroy()
+        });
+    }
+
+    showPopup(x, y, message, color) {
+        let txt = this.add.text(x, y, message, { fontSize: '14px', fill: '#' + color.toString(16) }).setOrigin(0.5);
+        this.tweens.add({
+            targets: txt,
+            y: y - 30,
+            alpha: 0,
+            duration: 1000,
+            onComplete: () => txt.destroy()
+        });
+    }
+
+    // --- チートパネルの同期 ---
+    setupCheatPanel() {
+        const atkSlider = document.getElementById('cheat-atk');
+        const atkVal = document.getElementById('atk-val');
+        const weaponSelect = document.getElementById('cheat-weapon');
+
+        atkSlider.addEventListener('input', (e) => {
+            this.cheatDamageMultiplier = parseFloat(e.target.value);
+            atkVal.innerText = this.cheatDamageMultiplier.toFixed(1);
+        });
+
+        weaponSelect.addEventListener('change', (e) => {
+            this.player.equip(e.target.value);
+        });
+    }
+}
+
+// ==========================================
+// 5. ゲームの起動設定
+// ==========================================
+const config = {
+    type: Phaser.AUTO,
+    width: 800,
+    height: 600,
+    parent: 'game-container',
+    physics: {
+        default: 'arcade',
+        arcade: {
+            gravity: { y: 0 },
+            debug: false
+        }
+    },
+    scene: MainScene
+};
+
+const game = new Phaser.Game(config);
+</script>
+
+</body>
+</html>
