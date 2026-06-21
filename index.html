@@ -80,10 +80,8 @@ class Player extends Phaser.Physics.Arcade.Sprite {
 
         // 向きの制御
         if (isAutoAttack && targetEnemy) {
-            // オートモード時は最も近い敵の方向を向く
             this.setRotation(Phaser.Math.Angle.Between(this.x, this.y, targetEnemy.x, targetEnemy.y));
         } else {
-            // マニュアル時はマウスカーソルの方向を向く
             let pointer = this.scene.input.activePointer;
             this.setRotation(Phaser.Math.Angle.Between(this.x, this.y, pointer.worldX, pointer.worldY));
         }
@@ -161,7 +159,10 @@ class Enemy extends Phaser.Physics.Arcade.Sprite {
     takeDamage(amount, weapon) {
         this.hp -= amount;
         this.scene.triggerHitStop(weapon.hitStop);
-        this.scene.sparks.emitParticleAt(this.x, this.y, Phaser.Math.Between(4, 8));
+        
+        // Phaser 3.60+ 新仕様パーティクル発生方法に変更
+        this.scene.sparks.explode(Phaser.Math.Between(4, 8), this.x, this.y);
+        
         this.scene.cameras.main.shake(80, weapon.shake);
         this.scene.showPopup(this.x, this.y - 15, Math.round(amount), 0xffffff, 22);
 
@@ -197,8 +198,6 @@ class MainScene extends Phaser.Scene {
         this.hitStopTimer = 0;
         this.isMenuOpen = false;
         this.menuIndex = 0;
-        
-        // オート攻撃フラグ
         this.isAutoAttack = false;
 
         // 背景グリッド
@@ -217,9 +216,14 @@ class MainScene extends Phaser.Scene {
 
         for(let i=0; i<15; i++) this.spawnChest(Phaser.Math.Between(200, 2800), Phaser.Math.Between(200, 2800));
 
+        // Phaser 3.60+ パーティクル作成構文の最適化
         this.sparks = this.add.particles(0, 0, 'spark', {
-            speed: { min: 120, max: 280 }, angle: { min: 0, max: 360 }, scale: { start: 1.5, end: 0 },
-            lifespan: 250, tint: [0xffaa00, 0xff3300], emitting: false
+            speed: { min: 120, max: 280 }, 
+            angle: { min: 0, max: 360 }, 
+            scale: { start: 1.5, end: 0 },
+            lifespan: 250, 
+            tint: [0xffaa00, 0xff3300], 
+            emitting: false
         });
 
         this.physics.add.overlap(this.bullets, this.enemies, this.handleBulletHit, null, this);
@@ -248,7 +252,6 @@ class MainScene extends Phaser.Scene {
             return;
         }
 
-        // 最も近い敵を取得
         let closestEnemy = this.getClosestEnemy();
 
         this.player.update(this.cursors, this.keys, this.isAutoAttack, closestEnemy);
@@ -258,16 +261,14 @@ class MainScene extends Phaser.Scene {
             p.takeDamage(e.config.atk * (delta / 1000));
         });
 
-        // --- 攻撃ロジック (マニュアル/オートの統合) ---
+        // 攻撃判定
         let pointer = this.input.activePointer;
         let canAttack = time > this.player.lastAttackTime + this.player.weapon.cooldown;
 
         if (canAttack) {
             if (this.isAutoAttack && closestEnemy) {
-                // オートモード: ターゲットが存在すれば自動攻撃
                 this.executeAttack(time, closestEnemy);
             } else if (!this.isAutoAttack && pointer.isDown) {
-                // マニュアルモード: クリックでマウス方向へ攻撃
                 this.executeAttack(time, null);
             }
         }
@@ -275,7 +276,8 @@ class MainScene extends Phaser.Scene {
         // キーイベント
         if (Phaser.Input.Keyboard.JustDown(this.keys.SPACE)) {
             this.isAutoAttack = !this.isAutoAttack;
-            this.showPopup(this.player.x, this.player.y - 40, this.isAutoAttack ? "AUTO MODE ON" : "AUTO MODE OFF", this.isAutoAttack ? 0x00ff00 : ...[0xff3333]);
+            // 構文エラーの原因になっていた部分を修正
+            this.showPopup(this.player.x, this.player.y - 40, this.isAutoAttack ? "AUTO MODE ON" : "AUTO MODE OFF", this.isAutoAttack ? 0x00ff00 : 0xff3333);
         }
         if (Phaser.Input.Keyboard.JustDown(this.keys.B)) this.toggleInventoryMenu();
         if (Phaser.Input.Keyboard.JustDown(this.keys.P)) this.player.usePotion();
@@ -284,9 +286,6 @@ class MainScene extends Phaser.Scene {
         this.updateUI();
     }
 
-    // ==========================================
-    // 4. 最も近い敵を探索するアルゴリズム
-    // ==========================================
     getClosestEnemy() {
         let activeEnemies = this.enemies.getChildren();
         if (activeEnemies.length === 0) return null;
@@ -352,7 +351,6 @@ class MainScene extends Phaser.Scene {
             this.time.delayedCall(i * (weapon.cooldown / (weapon.multiHit + 1)), () => {
                 if (!this.player.active) return;
 
-                // ターゲット指定（オート）があればその方向、なければプレイヤーの現在の正面を向く
                 let angle = targetEnemy ? Phaser.Math.Angle.Between(this.player.x, this.player.y, targetEnemy.x, targetEnemy.y) : this.player.rotation;
 
                 if (weapon.type === "melee") {
@@ -392,11 +390,9 @@ class MainScene extends Phaser.Scene {
     createOverlayUI() {
         this.uiContainer = this.add.container(0, 0).setScrollFactor(0).setDepth(100);
 
-        // ステータステキスト
         this.statusText = this.add.text(20, 20, '', { fontSize: '18px', fill: '#fff', stroke: '#000', strokeThickness: 3 });
         this.uiContainer.add(this.statusText);
 
-        // インベントリメニュー
         this.menuBg = this.add.graphics();
         this.menuBg.fillStyle(0x111111, 0.95).fillRect(200, 100, 400, 400).lineStyle(3, 0xffffff).strokeRect(200, 100, 400, 400);
         this.menuBg.setVisible(false);
@@ -411,7 +407,6 @@ class MainScene extends Phaser.Scene {
     updateUI() {
         let p = this.player;
         let autoStatus = this.isAutoAttack ? "ON (最至近ターゲット)" : "OFF (マウス照準)";
-        let autoColor = this.isAutoAttack ? "rgba(0,255,100,1)" : "rgba(255,255,255,1)";
 
         this.statusText.setText(
             `PLAYER: Lv.${p.level}\n` +
