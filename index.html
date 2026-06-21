@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Fantasy RPG Prototype</title>
+    <title>Fantasy RPG Prototype - Auto Battle Edition</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
     <style>
         body {
@@ -21,7 +21,7 @@
 
 <script>
 // ==========================================
-// 1. データ構造の定義（拡張用）
+// 1. データ構造の定義
 // ==========================================
 const WEAPON_DATA = {
     bareHands:   { name: "素手", damage: 10, cooldown: 350, range: 60, type: "melee", color: 0xaaaaaa, scaleX: 1.0, scaleY: 0.2, hitStop: 40, shake: 0.005, multiHit: 1 },
@@ -30,7 +30,6 @@ const WEAPON_DATA = {
     dualBlades:  { name: "双剣", damage: 8, cooldown: 220, range: 70, type: "melee", color: 0xffcc00, scaleX: 1.1, scaleY: 0.15, hitStop: 20, shake: 0.004, multiHit: 3 }
 };
 
-// 敵の種類定義（ランダム生成のベース）
 const ENEMY_TYPES = [
     { name: "スライム", color: 0x33ccff, minSize: 12, maxSize: 16, speed: 80,  hp: 30,  exp: 15,  atk: 8,  defense: 2 },
     { name: "ゴブリン", color: 0x33ff33, minSize: 16, maxSize: 22, speed: 140, hp: 60,  exp: 35,  atk: 14, defense: 5 },
@@ -61,23 +60,16 @@ class Player extends Phaser.Physics.Arcade.Sprite {
         this.baseAtk = 0; 
         this.baseDef = 5;
 
-        // インベントリ＆装備 (初期状態)
-        this.inventory = [
-            { type: 'weapon', key: 'bareHands', count: 1 }
-        ];
+        // インベントリ＆装備
+        this.inventory = [{ type: 'weapon', key: 'bareHands', count: 1 }];
         this.equippedWeaponKey = 'bareHands';
         this.lastAttackTime = 0;
     }
 
-    get attack() {
-        return this.baseAtk + WEAPON_DATA[this.equippedWeaponKey].damage;
-    }
+    get attack() { return this.baseAtk + WEAPON_DATA[this.equippedWeaponKey].damage; }
+    get weapon() { return WEAPON_DATA[this.equippedWeaponKey]; }
 
-    get weapon() {
-        return WEAPON_DATA[this.equippedWeaponKey];
-    }
-
-    update(cursors, keys) {
+    update(cursors, keys, isAutoAttack, targetEnemy) {
         let accelX = 0, accelY = 0;
         const accelConst = 2500;
         if (cursors.left.isDown || keys.A.isDown) accelX = -accelConst;
@@ -86,31 +78,29 @@ class Player extends Phaser.Physics.Arcade.Sprite {
         else if (cursors.down.isDown || keys.S.isDown) accelY = accelConst;
         this.setAcceleration(accelX, accelY);
 
-        let pointer = this.scene.input.activePointer;
-        this.setRotation(Phaser.Math.Angle.Between(this.x, this.y, pointer.worldX, pointer.worldY));
+        // 向きの制御
+        if (isAutoAttack && targetEnemy) {
+            // オートモード時は最も近い敵の方向を向く
+            this.setRotation(Phaser.Math.Angle.Between(this.x, this.y, targetEnemy.x, targetEnemy.y));
+        } else {
+            // マニュアル時はマウスカーソルの方向を向く
+            let pointer = this.scene.input.activePointer;
+            this.setRotation(Phaser.Math.Angle.Between(this.x, this.y, pointer.worldX, pointer.worldY));
+        }
     }
 
     gainExp(amount) {
         this.exp += amount;
         this.scene.showPopup(this.x, this.y - 40, `+${amount} Exp`, 0xffff00);
-        if (this.exp >= this.nextExp) {
-            this.levelUp();
-        }
+        if (this.exp >= this.nextExp) this.levelUp();
     }
 
     levelUp() {
         this.exp -= this.nextExp;
         this.level++;
         this.nextExp = Math.floor(this.nextExp * 1.5);
-        
-        // ステータス上昇
-        this.maxHp += 20;
-        this.maxMp += 8;
-        this.baseAtk += 5;
-        this.baseDef += 3;
-        this.hp = this.maxHp;
-        this.mp = this.maxMp;
-
+        this.maxHp += 20; this.maxMp += 8; this.baseAtk += 5; this.baseDef += 3;
+        this.hp = this.maxHp; this.mp = this.maxMp;
         this.scene.showPopup(this.x, this.y - 60, `LEVEL UP! Lv.${this.level}`, 0x00ffff, 24);
         this.scene.cameras.main.flash(300, 0, 255, 255);
     }
@@ -120,10 +110,7 @@ class Player extends Phaser.Physics.Arcade.Sprite {
         this.hp -= netDamage;
         this.scene.cameras.main.shake(100, 0.01);
         this.scene.showPopup(this.x, this.y - 20, `-${netDamage}`, 0xff0000, 20);
-        if (this.hp <= 0) {
-            this.hp = 0;
-            this.scene.gameOver();
-        }
+        if (this.hp <= 0) { this.hp = 0; this.scene.gameOver(); }
     }
 
     usePotion() {
@@ -151,7 +138,7 @@ class Player extends Phaser.Physics.Arcade.Sprite {
 
 class Enemy extends Phaser.Physics.Arcade.Sprite {
     constructor(scene, x, y, config) {
-        super(scene, x, y, 'enemy_rect'); // 動的描画のため仮キー
+        super(scene, x, y, 'enemy_rect');
         scene.add.existing(this);
         scene.physics.add.existing(this);
 
@@ -159,28 +146,20 @@ class Enemy extends Phaser.Physics.Arcade.Sprite {
         this.hp = config.hp;
         this.maxHp = config.hp;
         
-        // ランダムなサイズと形状（スケール変化とカラーで表現）
         let randomScale = Phaser.Math.FloatBetween(config.minSize, config.maxSize) / 16;
         this.setScale(randomScale);
-        if(Phaser.Math.Between(0, 1) === 1) {
-            this.setCircle(16); // 丸型
-        } else {
-            this.setSize(32, 32); // 四角型
-        }
+        if(Phaser.Math.Between(0, 1) === 1) this.setCircle(16); else this.setSize(32, 32);
         this.tint = config.color;
     }
 
     update(player) {
         if (!player.active) return;
-        // プレイヤーを単純追尾
         let angle = Phaser.Math.Angle.Between(this.x, this.y, player.x, player.y);
         this.setVelocity(Math.cos(angle) * this.config.speed, Math.sin(angle) * this.config.speed);
     }
 
     takeDamage(amount, weapon) {
         this.hp -= amount;
-        
-        // 被弾演出のジューシーさ
         this.scene.triggerHitStop(weapon.hitStop);
         this.scene.sparks.emitParticleAt(this.x, this.y, Phaser.Math.Between(4, 8));
         this.scene.cameras.main.shake(80, weapon.shake);
@@ -190,10 +169,7 @@ class Enemy extends Phaser.Physics.Arcade.Sprite {
 
         if (this.hp <= 0) {
             this.scene.player.gainExp(this.config.exp);
-            // 確率でその場に宝箱をドロップ
-            if(Phaser.Math.Between(1, 100) <= 35) {
-                this.scene.spawnChest(this.x, this.y);
-            }
+            if(Phaser.Math.Between(1, 100) <= 40) this.scene.spawnChest(this.x, this.y);
             this.destroy();
         }
     }
@@ -206,7 +182,6 @@ class MainScene extends Phaser.Scene {
     constructor() { super('MainScene'); }
 
     preload() {
-        // テクスチャ自動生成
         let drawTex = (key, f) => { let g = this.make.graphics({x:0,y:0,add:false}); f(g); g.generateTexture(key, 32, 32); };
         drawTex('player',     g => { g.fillStyle(0xffffff); g.fillCircle(16,16,16); g.fillStyle(0x000,0.6); g.fillRect(16,12,12,8); });
         drawTex('enemy_rect', g => { g.fillStyle(0xffffff); g.fillRect(0,0,32,32); });
@@ -222,6 +197,9 @@ class MainScene extends Phaser.Scene {
         this.hitStopTimer = 0;
         this.isMenuOpen = false;
         this.menuIndex = 0;
+        
+        // オート攻撃フラグ
+        this.isAutoAttack = false;
 
         // 背景グリッド
         let grid = this.add.graphics();
@@ -229,38 +207,30 @@ class MainScene extends Phaser.Scene {
         for(let x=0; x<3000; x+=50) grid.lineBetween(x, 0, x, 3000);
         for(let y=0; y<3000; y+=50) grid.lineBetween(0, y, 3000, y);
 
-        // グループ
         this.enemies = this.physics.add.group();
         this.bullets = this.physics.add.group();
         this.chests = this.physics.add.group();
 
-        // プレイヤー配置
         this.player = new Player(this, 1500, 1500);
         this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
         this.cameras.main.setBounds(0, 0, 3000, 3000);
 
-        // 初期オブジェクト配置
         for(let i=0; i<15; i++) this.spawnChest(Phaser.Math.Between(200, 2800), Phaser.Math.Between(200, 2800));
 
-        // エフェクト
         this.sparks = this.add.particles(0, 0, 'spark', {
             speed: { min: 120, max: 280 }, angle: { min: 0, max: 360 }, scale: { start: 1.5, end: 0 },
             lifespan: 250, tint: [0xffaa00, 0xff3300], emitting: false
         });
 
-        // コリジョン
         this.physics.add.overlap(this.bullets, this.enemies, this.handleBulletHit, null, this);
         this.physics.add.overlap(this.player, this.chests, this.handleChestOverlap, null, this);
         this.physics.add.collider(this.enemies, this.enemies);
 
-        // 入力
         this.cursors = this.input.keyboard.createCursorKeys();
-        this.keys = this.input.keyboard.addKeys('W,A,S,D,E,B,P,Q,ENTER');
+        this.keys = this.input.keyboard.addKeys('W,A,S,D,E,B,P,Q,ENTER,SPACE');
 
-        // 定期的な敵の自動スポーン
-        this.time.addEvent({ delay: 1500, callback: this.spawnRandomEnemy, callbackScope: this, loop: true });
+        this.time.addEvent({ delay: 1200, callback: this.spawnRandomEnemy, callbackScope: this, loop: true });
 
-        // 固定UIの作成
         this.createOverlayUI();
     }
 
@@ -273,27 +243,40 @@ class MainScene extends Phaser.Scene {
             this.physics.world.resume();
         }
 
-        // メニュー（インベントリ）が開いている間はゲームを一時停止
         if (this.isMenuOpen) {
             this.handleMenuInput();
             return;
         }
 
-        this.player.update(this.cursors, this.keys);
+        // 最も近い敵を取得
+        let closestEnemy = this.getClosestEnemy();
+
+        this.player.update(this.cursors, this.keys, this.isAutoAttack, closestEnemy);
         this.enemies.getChildren().forEach(e => e.update(this.player));
 
-        // プレイヤーと敵の直接接触ダメージ
         this.physics.overlap(this.player, this.enemies, (p, e) => {
             p.takeDamage(e.config.atk * (delta / 1000));
         });
 
-        // 攻撃判定
+        // --- 攻撃ロジック (マニュアル/オートの統合) ---
         let pointer = this.input.activePointer;
-        if ((this.cursors.space.isDown || pointer.isDown) && time > this.player.lastAttackTime + this.player.weapon.cooldown) {
-            this.executeAttack(time);
+        let canAttack = time > this.player.lastAttackTime + this.player.weapon.cooldown;
+
+        if (canAttack) {
+            if (this.isAutoAttack && closestEnemy) {
+                // オートモード: ターゲットが存在すれば自動攻撃
+                this.executeAttack(time, closestEnemy);
+            } else if (!this.isAutoAttack && pointer.isDown) {
+                // マニュアルモード: クリックでマウス方向へ攻撃
+                this.executeAttack(time, null);
+            }
         }
 
-        // キー単発押しイベント
+        // キーイベント
+        if (Phaser.Input.Keyboard.JustDown(this.keys.SPACE)) {
+            this.isAutoAttack = !this.isAutoAttack;
+            this.showPopup(this.player.x, this.player.y - 40, this.isAutoAttack ? "AUTO MODE ON" : "AUTO MODE OFF", this.isAutoAttack ? 0x00ff00 : ...[0xff3333]);
+        }
         if (Phaser.Input.Keyboard.JustDown(this.keys.B)) this.toggleInventoryMenu();
         if (Phaser.Input.Keyboard.JustDown(this.keys.P)) this.player.usePotion();
         if (Phaser.Input.Keyboard.JustDown(this.keys.Q)) this.player.cycleWeapon();
@@ -302,44 +285,50 @@ class MainScene extends Phaser.Scene {
     }
 
     // ==========================================
-    // 4. 新要素のロジック
+    // 4. 最も近い敵を探索するアルゴリズム
     // ==========================================
+    getClosestEnemy() {
+        let activeEnemies = this.enemies.getChildren();
+        if (activeEnemies.length === 0) return null;
+
+        let closest = null;
+        let minDist = Infinity;
+
+        activeEnemies.forEach(enemy => {
+            let dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y);
+            if (dist < minDist) {
+                minDist = dist;
+                closest = enemy;
+            }
+        });
+
+        return closest;
+    }
 
     spawnRandomEnemy() {
-        if (this.enemies.getLength() > 40) return; // 制限
-
-        // プレイヤーの画面外に生成
+        if (this.enemies.getLength() > 45) return;
         let angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
-        let dist = Phaser.Math.Between(500, 800);
-        let x = this.player.x + Math.cos(angle) * dist;
-        let y = this.player.y + Math.sin(angle) * dist;
-
-        x = Phaser.Math.Clamp(x, 50, 2950);
-        y = Phaser.Math.Clamp(y, 50, 2950);
+        let dist = Phaser.Math.Between(500, 850);
+        let x = Phaser.Math.Clamp(this.player.x + Math.cos(angle) * dist, 50, 2950);
+        let y = Phaser.Math.Clamp(this.player.y + Math.sin(angle) * dist, 50, 2950);
 
         let typeConfig = ENEMY_TYPES[Phaser.Math.Between(0, ENEMY_TYPES.length - 1)];
-        let enemy = new Enemy(this, x, y, typeConfig);
-        this.enemies.add(enemy);
+        this.enemies.add(new Enemy(this, x, y, typeConfig));
     }
 
     spawnChest(x, y) {
-        let chest = this.chests.create(x, y, 'chest');
-        chest.setImmovable(true);
+        this.chests.create(x, y, 'chest').setImmovable(true);
     }
 
     handleChestOverlap(player, chest) {
         chest.destroy();
         this.cameras.main.flash(100, 255, 215, 0, 0.3);
 
-        // 宝箱の中身をランダムに決定 (回復薬 or 武器)
         if (Phaser.Math.Between(1, 100) <= 45) {
-            // 回復ポーション獲得
             let exist = player.inventory.find(item => item.type === 'potion');
-            if(exist) exist.count++;
-            else player.inventory.push({ type: 'potion', name: '回復ポーション', count: 1 });
+            if(exist) exist.count++; else player.inventory.push({ type: 'potion', name: '回復ポーション', count: 1 });
             this.showPopup(player.x, player.y - 30, "宝箱: 回復ポーションを入手！", 0xff3366);
         } else {
-            // 武器獲得（現在装備していないランダムなもの）
             const wKeys = Object.keys(WEAPON_DATA).filter(k => k !== 'bareHands');
             let pickedKey = wKeys[Phaser.Math.Between(0, wKeys.length - 1)];
             
@@ -348,7 +337,6 @@ class MainScene extends Phaser.Scene {
                 player.inventory.push({ type: 'weapon', key: pickedKey, name: WEAPON_DATA[pickedKey].name, count: 1 });
                 this.showPopup(player.x, player.y - 30, `宝箱: 武器『${WEAPON_DATA[pickedKey].name}』を入手！`, 0x00ffcc);
             } else {
-                // 既に持っている場合はポーションに変換
                 let pot = player.inventory.find(item => item.type === 'potion');
                 if(pot) pot.count++; else player.inventory.push({ type: 'potion', name: '回復ポーション', count: 1 });
                 this.showPopup(player.x, player.y - 30, "宝箱: 武器重複のためポーションに変換", 0xff9900);
@@ -356,14 +344,16 @@ class MainScene extends Phaser.Scene {
         }
     }
 
-    executeAttack(time) {
+    executeAttack(time, targetEnemy) {
         this.player.lastAttackTime = time;
         const weapon = this.player.weapon;
 
         for (let i = 0; i < weapon.multiHit; i++) {
             this.time.delayedCall(i * (weapon.cooldown / (weapon.multiHit + 1)), () => {
                 if (!this.player.active) return;
-                let angle = this.player.rotation;
+
+                // ターゲット指定（オート）があればその方向、なければプレイヤーの現在の正面を向く
+                let angle = targetEnemy ? Phaser.Math.Angle.Between(this.player.x, this.player.y, targetEnemy.x, targetEnemy.y) : this.player.rotation;
 
                 if (weapon.type === "melee") {
                     let rx = this.player.x + Math.cos(angle) * weapon.range;
@@ -372,7 +362,6 @@ class MainScene extends Phaser.Scene {
                     let slash = this.add.sprite(rx, ry, 'slash').setRotation(angle).setTint(weapon.color).setScale(weapon.scaleX, weapon.scaleY);
                     this.tweens.add({ targets: slash, alpha: 0, scaleY: 0, duration: 120, onComplete: () => slash.destroy() });
 
-                    // 範囲内の全敵へダメージ
                     this.enemies.getChildren().forEach(enemy => {
                         if (Phaser.Math.Distance.Between(rx, ry, enemy.x, enemy.y) < 40 + (weapon.range * 0.4)) {
                             enemy.takeDamage(this.player.attack, weapon);
@@ -401,14 +390,13 @@ class MainScene extends Phaser.Scene {
     // ==========================================
 
     createOverlayUI() {
-        // 全画面固定UI用コンテナ
         this.uiContainer = this.add.container(0, 0).setScrollFactor(0).setDepth(100);
 
         // ステータステキスト
         this.statusText = this.add.text(20, 20, '', { fontSize: '18px', fill: '#fff', stroke: '#000', strokeThickness: 3 });
         this.uiContainer.add(this.statusText);
 
-        // インベントリ背景メニューオブジェクト（初期は非表示）
+        // インベントリメニュー
         this.menuBg = this.add.graphics();
         this.menuBg.fillStyle(0x111111, 0.95).fillRect(200, 100, 400, 400).lineStyle(3, 0xffffff).strokeRect(200, 100, 400, 400);
         this.menuBg.setVisible(false);
@@ -422,14 +410,18 @@ class MainScene extends Phaser.Scene {
 
     updateUI() {
         let p = this.player;
+        let autoStatus = this.isAutoAttack ? "ON (最至近ターゲット)" : "OFF (マウス照準)";
+        let autoColor = this.isAutoAttack ? "rgba(0,255,100,1)" : "rgba(255,255,255,1)";
+
         this.statusText.setText(
             `PLAYER: Lv.${p.level}\n` +
             `HP:  ${Math.ceil(p.hp)} / ${p.maxHp}\n` +
             `MP:  ${p.mp} / ${p.maxMp}\n` +
             `ATK: ${p.attack} | DEF: ${p.baseDef}\n` +
             `EXP: ${p.exp} / ${p.nextExp}\n\n` +
+            `AUTO ATTACK: ${autoStatus}\n` +
             `EQUIP: [${p.weapon.name}]\n\n` +
-            `[B]:バッグ開閉 [P]:ポーション使用 [Q]:武器切替`
+            `[SPACE]:オート切替 [B]:バッグ [P]:ポーション [Q]:武器切替`
         );
     }
 
@@ -444,7 +436,6 @@ class MainScene extends Phaser.Scene {
     refreshMenuTexts() {
         this.menuItemTexts.forEach(t => t.destroy());
         this.menuItemTexts = [];
-
         if (!this.isMenuOpen) return;
 
         this.player.inventory.forEach((item, idx) => {
@@ -453,16 +444,10 @@ class MainScene extends Phaser.Scene {
 
             let isSelected = idx === this.menuIndex;
             let itemText = this.add.text(400, 180 + idx * 30, (isSelected ? "> " : "  ") + nameStr, {
-                fontSize: '16px',
-                fill: isSelected ? '#ffff00' : '#ffffff'
+                fontSize: '16px', fill: isSelected ? '#ffff00' : '#ffffff'
             }).setOrigin(0.5).setInteractive();
 
-            // マウスクリックでの選択・使用にも対応
-            itemText.on('pointerdown', () => {
-                this.menuIndex = idx;
-                this.useSelectedInventoryItem();
-            });
-
+            itemText.on('pointerdown', () => { this.menuIndex = idx; this.useSelectedInventoryItem(); });
             this.uiContainer.add(itemText);
             this.menuItemTexts.push(itemText);
         });
@@ -475,19 +460,15 @@ class MainScene extends Phaser.Scene {
     }
 
     handleMenuInput() {
-        if (Phaser.Input.Keyboard.JustDown(this.keys.B)) {
-            this.toggleInventoryMenu();
-            return;
-        }
-
+        if (Phaser.Input.Keyboard.JustDown(this.keys.B)) { this.toggleInventoryMenu(); return; }
         let invLen = this.player.inventory.length;
         if (invLen === 0) return;
 
-        if (Phaser.Input.Keyboard.JustDown(this.cursors.up) || Phaser.Input.Keyboard.JustDown(this.cursors.left)) {
+        if (Phaser.Input.Keyboard.JustDown(this.cursors.up)) {
             this.menuIndex = (this.menuIndex - 1 + invLen) % invLen;
             this.refreshMenuTexts();
         }
-        if (Phaser.Input.Keyboard.JustDown(this.cursors.down) || Phaser.Input.Keyboard.JustDown(this.cursors.right)) {
+        if (Phaser.Input.Keyboard.JustDown(this.cursors.down)) {
             this.menuIndex = (this.menuIndex + 1) % invLen;
             this.refreshMenuTexts();
         }
@@ -517,35 +498,28 @@ class MainScene extends Phaser.Scene {
 
     gameOver() {
         this.physics.pause();
-        let goText = this.add.text(this.cameras.main.centerX, this.cameras.main.centerY, "GAME OVER\n\n画面クリックでリスタート", {
+        this.add.text(this.cameras.main.centerX, this.cameras.main.centerY, "GAME OVER\n\n画面クリックでリスタート", {
             fontSize: '40px', fill: '#ff0000', align: 'center', fontStyle: 'bold'
         }).setOrigin(0.5).setScrollFactor(0).setDepth(1000);
-        
         this.input.once('pointerdown', () => { this.scene.restart(); });
     }
 }
 
 // ==========================================
-// 6. メイン起動設定 (全画面対応リサイズ機能搭載)
+// 6. メイン起動設定
 // ==========================================
 const config = {
     type: Phaser.AUTO,
     width: window.innerWidth,
     height: window.innerHeight,
-    scale: {
-        mode: Phaser.Scale.RESIZE, // 全画面リサイズ追従
-        autoCenter: Phaser.Scale.CENTER_BOTH
-    },
+    scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
     parent: 'game-container',
     physics: { default: 'arcade', arcade: { gravity: { y: 0 }, debug: false } },
     scene: MainScene
 };
 
 const game = new Phaser.Game(config);
-
-window.addEventListener('resize', () => {
-    game.scale.resize(window.innerWidth, window.innerHeight);
-});
+window.addEventListener('resize', () => { game.scale.resize(window.innerWidth, window.innerHeight); });
 </script>
 
 </body>
