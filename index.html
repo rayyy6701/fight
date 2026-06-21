@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Fantasy RPG Prototype - Auto Battle Edition</title>
-    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <style>
         body {
             margin: 0;
@@ -20,6 +20,15 @@
 <body>
 
 <script>
+// もし上のCDNすらGitHubに拒否された場合、ブラウザのコンソールにエラーを出して真っ黒になるのを防ぐためのチェック
+if (typeof Phaser === 'undefined') {
+    document.body.innerHTML = `<div style="color: #webkit-linear-gradient; color: white; padding: 20px; font-family: sans-serif; text-align: center;">
+        <h2>ゲームエンジンの読み込みに失敗しました</h2>
+        <p>GitHubのセキュリティ制限によりブロックされた可能性があります。</p>
+        <p>対策として、HTMLファイルと同じ場所に phaser.min.js をダウンロードして配置することをおすすめします。</p>
+    </div>`;
+}
+
 // ==========================================
 // 1. データ構造の定義
 // ==========================================
@@ -40,7 +49,6 @@ const ENEMY_TYPES = [
 // ==========================================
 // 2. キャラクター＆エンティティクラス
 // ==========================================
-
 class Player extends Phaser.Physics.Arcade.Sprite {
     constructor(scene, x, y) {
         super(scene, x, y, 'player');
@@ -49,7 +57,6 @@ class Player extends Phaser.Physics.Arcade.Sprite {
         this.setCircle(16).setCollideWorldBounds(true).setDrag(2000).setMaxVelocity(350);
         this.tint = 0x00ff88;
 
-        // RPG ステータス
         this.level = 1;
         this.exp = 0;
         this.nextExp = 50;
@@ -60,7 +67,6 @@ class Player extends Phaser.Physics.Arcade.Sprite {
         this.baseAtk = 0; 
         this.baseDef = 5;
 
-        // インベントリ＆装備
         this.inventory = [{ type: 'weapon', key: 'bareHands', count: 1 }];
         this.equippedWeaponKey = 'bareHands';
         this.lastAttackTime = 0;
@@ -78,7 +84,6 @@ class Player extends Phaser.Physics.Arcade.Sprite {
         else if (cursors.down.isDown || keys.S.isDown) accelY = accelConst;
         this.setAcceleration(accelX, accelY);
 
-        // 向きの制御
         if (isAutoAttack && targetEnemy) {
             this.setRotation(Phaser.Math.Angle.Between(this.x, this.y, targetEnemy.x, targetEnemy.y));
         } else {
@@ -159,10 +164,7 @@ class Enemy extends Phaser.Physics.Arcade.Sprite {
     takeDamage(amount, weapon) {
         this.hp -= amount;
         this.scene.triggerHitStop(weapon.hitStop);
-        
-        // Phaser 3.60+ 新仕様パーティクル発生方法に変更
         this.scene.sparks.explode(Phaser.Math.Between(4, 8), this.x, this.y);
-        
         this.scene.cameras.main.shake(80, weapon.shake);
         this.scene.showPopup(this.x, this.y - 15, Math.round(amount), 0xffffff, 22);
 
@@ -200,7 +202,6 @@ class MainScene extends Phaser.Scene {
         this.menuIndex = 0;
         this.isAutoAttack = false;
 
-        // 背景グリッド
         let grid = this.add.graphics();
         grid.lineStyle(1, 0x1a1a1a, 1);
         for(let x=0; x<3000; x+=50) grid.lineBetween(x, 0, x, 3000);
@@ -216,7 +217,6 @@ class MainScene extends Phaser.Scene {
 
         for(let i=0; i<15; i++) this.spawnChest(Phaser.Math.Between(200, 2800), Phaser.Math.Between(200, 2800));
 
-        // Phaser 3.60+ パーティクル作成構文の最適化
         this.sparks = this.add.particles(0, 0, 'spark', {
             speed: { min: 120, max: 280 }, 
             angle: { min: 0, max: 360 }, 
@@ -261,7 +261,6 @@ class MainScene extends Phaser.Scene {
             p.takeDamage(e.config.atk * (delta / 1000));
         });
 
-        // 攻撃判定
         let pointer = this.input.activePointer;
         let canAttack = time > this.player.lastAttackTime + this.player.weapon.cooldown;
 
@@ -273,10 +272,8 @@ class MainScene extends Phaser.Scene {
             }
         }
 
-        // キーイベント
         if (Phaser.Input.Keyboard.JustDown(this.keys.SPACE)) {
             this.isAutoAttack = !this.isAutoAttack;
-            // 構文エラーの原因になっていた部分を修正
             this.showPopup(this.player.x, this.player.y - 40, this.isAutoAttack ? "AUTO MODE ON" : "AUTO MODE OFF", this.isAutoAttack ? 0x00ff00 : 0xff3333);
         }
         if (Phaser.Input.Keyboard.JustDown(this.keys.B)) this.toggleInventoryMenu();
@@ -382,10 +379,6 @@ class MainScene extends Phaser.Scene {
     }
 
     triggerHitStop(duration) { this.hitStopTimer = duration; }
-
-    // ==========================================
-    // 5. インベントリ＆UIシステム
-    // ==========================================
 
     createOverlayUI() {
         this.uiContainer = this.add.container(0, 0).setScrollFactor(0).setDepth(100);
